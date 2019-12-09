@@ -13,6 +13,7 @@ import curses
 from curses import wrapper
 import signal
 from threading import Lock
+from tornado.websocket import WebSocketClosedError
 
 # hostname to bandwidth
 host_bw = {}
@@ -104,9 +105,15 @@ class VMPostHandler(tornado.web.RequestHandler):
 class WebSocketHandler(websocket.WebSocketHandler):
 
     def on_message(self, message):
-        history = host_bw.get(message, BwHistory())
-        msg = {'hostname': message, 'usage': history.dump()}
-        self.write_message(msg)
+        try:
+            while True:
+                history = host_bw.get(message, BwHistory())
+                msg = {'hostname': message, 'usage': history.dump()}
+                self.write_message(msg)
+                await asyncio.sleep(1)
+        except WebSocketClosedError:
+            pass
+
 
 if __name__ == '__main__':
     app = tornado.web.Application([
