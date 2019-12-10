@@ -159,7 +159,8 @@ class CurBwHandler(websocket.WebSocketHandler):
 if __name__ == '__main__':
     app = tornado.web.Application([
         (r'/', VMPostHandler),
-        (r'/usage', BwHistoryHandler)
+        (r'/usage', BwHistoryHandler),
+        (r'/hoseusage', CurBwHandler)
         ], debug=True)
     signal.signal(signal.SIGINT, signal_handler) 
     PrintCurses.init()
