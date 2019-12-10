@@ -17,6 +17,7 @@ from tornado.websocket import WebSocketClosedError
 
 # hostname to bandwidth
 host_bw = {}
+bw_lock = Lock()
 # hostname to line
 host_line = {}
 
@@ -56,6 +57,12 @@ class BwHistory:
 
     def get_latest(self):
         return self.bw_history[-1]
+    
+    def latest_bw(self):
+        if len(self.bw_history) == 0:
+            return 0.0
+        else:
+            return self.bw_history[-1]['rx']
 """
 async def show_usage(websocket, path):
     ip_addr = path.strip('/').strip().replace('-', '.')
@@ -89,7 +96,12 @@ class VMPostHandler(tornado.web.RequestHandler):
         if hostname not in host_bw:
             host_bw[hostname] = BwHistory()
             host_line[hostname] = len(host_bw)
-        host_bw[hostname].push(vm_info)
+
+        bw_lock.acquire()
+        try:
+            host_bw[hostname].push(vm_info)
+        finally:
+            bw_lock.release()
         output = '{}\t\t{}\t\t{}\t\t{}\t\t{}\n'.format(vm_info['hostname'], vm_info['tx'], vm_info['rx'], vm_info['cpu_usage'], \
                 vm_info['mem_util'])
         #print(output, end="")
@@ -102,14 +114,43 @@ class VMPostHandler(tornado.web.RequestHandler):
         self.set_status(200)
         self.finish()
 
-class WebSocketHandler(websocket.WebSocketHandler):
+class BwHistoryHandler(websocket.WebSocketHandler):
 
-    def on_message(self, message):
+    def check_origin(self, origin):
+        return True
+
+    async def on_message(self, message):
         try:
             while True:
-                history = host_bw.get(message, BwHistory())
+                bw_lock.acquire()
+                try:
+                    history = host_bw.get(message, BwHistory())
+                finally:
+                    bw_lock.release()
                 msg = {'hostname': message, 'usage': history.dump()}
-                self.write_message(msg)
+                await self.write_message(json.dumps(msg))
+                await asyncio.sleep(1)
+        except WebSocketClosedError:
+            pass
+
+class CurBwHandler(websocket.WebSocketHandler):
+
+    def check_origin(self, origin):
+        return True
+    
+    async def on_message(self, message):
+        vm_list = json.loads(message)['vm']
+        try:
+            while True:
+                bw_lock.acquire()
+                try:
+                    bw_real = {}
+                    for vm in vm_list:
+                        bw_real[vm] = host_bw.get(vm, BwHistory()).latest_bw()
+                finally:
+                    bw_lock.release()
+                msg = json.dumps(bw_real)
+                await self.write_message(msg)
                 await asyncio.sleep(1)
         except WebSocketClosedError:
             pass
@@ -118,8 +159,8 @@ class WebSocketHandler(websocket.WebSocketHandler):
 if __name__ == '__main__':
     app = tornado.web.Application([
         (r'/', VMPostHandler),
-        (r'/get', WebSocketHandler)
-        ])
+        (r'/usage', BwHistoryHandler)
+        ], debug=True)
     signal.signal(signal.SIGINT, signal_handler) 
     PrintCurses.init()
     http_server = tornado.httpserver.HTTPServer(app)
